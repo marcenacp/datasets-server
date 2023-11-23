@@ -39,16 +39,32 @@ HF_TO_CROISSANT_VALUE_TYPE = {
 
 NAME_PATTERN_REGEX = "[^a-zA-Z0-9\\-_\\.]"
 
-def _escape_name(name: str) -> str:
-    """Escapes names in Croissant, as `/` are used in the syntax as delimiters."""
-    return re.sub(NAME_PATTERN_REGEX, "_", name)
+def _escape_name(name: str, names: set[str]) -> str:
+    """Escapes names in Croissant.
+
+    Reasons:
+    - `/` are used in the syntax as delimiters. So we replace them.
+    - Two FileObject/FileSet/RecordSet cannot have the same name. So we append a postfix in case it happens.
+    
+    Args:
+        name: The initial non-escaped name.
+        names: The set of already existing names.
+    Returns:
+        The escaped name.
+    """
+    escaped_name = re.sub(NAME_PATTERN_REGEX, "_", name)
+    while escaped_name in names:
+        escaped_name = f"{escaped_name}_0"
+    return escaped_name
 
 
 def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]], partial: bool) -> Mapping[str, Any]:
+    repo_name = "repo"
+    names: set[str] = set(repo_name)
     distribution = [
         {
             "@type": "sc:FileObject",
-            "name": "repo",
+            "name": repo_name,
             "description": "The Hugging Face git repository.",
             "contentUrl": f"https://huggingface.co/datasets/{dataset}/tree/refs%2Fconvert%2Fparquet",
             "encodingFormat": "git+https",
@@ -65,7 +81,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
         distribution.append(
             {
                 "@type": "sc:FileSet",
-                "name": _escape_name(distribution_name),
+                "name": _escape_name(distribution_name, names),
                 "containedIn": "repo",
                 "encodingFormat": "application/x-parquet",
                 "includes": f"{config}/*/*.parquet",
@@ -73,11 +89,12 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
         )
         skipped_columns = []
         for column, feature in features.items():
+            fields_names: set[str] = set()
             if isinstance(feature, Value) and feature.dtype in HF_TO_CROISSANT_VALUE_TYPE:
                 fields.append(
                     {
                         "@type": "ml:Field",
-                        "name": _escape_name(column),
+                        "name": _escape_name(column, fields_names),
                         "description": f"Column '{column}' from the Hugging Face parquet file.",
                         "dataType": HF_TO_CROISSANT_VALUE_TYPE[feature.dtype],
                         "source": {"distribution": distribution_name, "extract": {"column": column}},
@@ -87,7 +104,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
                 fields.append(
                     {
                         "@type": "ml:Field",
-                        "name": _escape_name(column),
+                        "name": _escape_name(column, fields_names),
                         "description": f"Image column '{column}' from the Hugging Face parquet file.",
                         "dataType": "sc:ImageObject",
                         "source": {
@@ -101,7 +118,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
                 fields.append(
                     {
                         "@type": "ml:Field",
-                        "name": _escape_name(column),
+                        "name": _escape_name(column, fields_names),
                         "description": f"ClassLabel column '{column}' from the Hugging Face parquet file.\nLabels:\n"
                         + ", ".join(f"{name} ({i})" for i, name in enumerate(feature.names)),
                         "dataType": "sc:Integer",
@@ -110,6 +127,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
                 )
             else:
                 skipped_columns.append(column)
+        record_set_name = config if config != dataset else f"record_set_{config}"
         description = f"{dataset} - '{config}' subset"
         if partial:
             description += " (first 5GB)"
@@ -124,7 +142,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
         record_set.append(
             {
                 "@type": "ml:RecordSet",
-                "name": _escape_name(config),
+                "name": _escape_name(record_set_name, names),
                 "description": description,
                 "field": fields,
             }
@@ -164,7 +182,7 @@ def get_croissant_from_dataset_infos(dataset: str, infos: list[Mapping[str, Any]
             "transform": "ml:transform",
         },
         "@type": "sc:Dataset",
-        "name": _escape_name(dataset),
+        "name": _escape_name(dataset, names),
         "description": f"{dataset} dataset hosted on Hugging Face and contributed by the HF Datasets community",
         "url": f"https://huggingface.co/datasets/{dataset}",
         "distribution": distribution,
